@@ -164,11 +164,21 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 					}
 					//oaiToolMessage.SetStringContent(*mediaMsg.GetMediaContent().Text)
 					if mediaMsg.IsStringContent() {
-						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
+						content := mediaMsg.GetStringContent()
+						// 如果内容为空字符串，替换为 {"stdout":""}
+						if content == "" {
+							content = `{"stdout":""}`
+						}
+						oaiToolMessage.SetStringContent(content)
 					} else {
 						mediaContents := mediaMsg.ParseMediaContent()
 						encodeJson, _ := common.Marshal(mediaContents)
-						oaiToolMessage.SetStringContent(string(encodeJson))
+						jsonContent := string(encodeJson)
+						// 如果媒体内容为空字符串，替换为 {"stdout":""}
+						if jsonContent == "" {
+							jsonContent = `{"stdout":""}`
+						}
+						oaiToolMessage.SetStringContent(jsonContent)
 					}
 					openAIMessages = append(openAIMessages, oaiToolMessage)
 				}
@@ -275,7 +285,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 					},
 					Delta: &dto.ClaudeMediaMessage{
-						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
+						StopReason: common.GetPointer[string](getStopReasonWithDefault(stopReasonOpenAI2Claude(info.FinishReason))),
 					},
 				})
 			}
@@ -306,7 +316,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 					},
 					Delta: &dto.ClaudeMediaMessage{
-						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
+						StopReason: common.GetPointer[string](getStopReasonWithDefault(stopReasonOpenAI2Claude(info.FinishReason))),
 					},
 				})
 			}
@@ -436,6 +446,13 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 
 	return claudeResponse
+}
+
+func getStopReasonWithDefault(reason string) string {
+	if reason == "" {
+		return "end_turn"
+	}
+	return reason
 }
 
 func stopReasonOpenAI2Claude(reason string) string {
