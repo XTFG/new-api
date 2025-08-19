@@ -261,7 +261,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 				Type: "content_block_delta",
 				Index: &info.ClaudeConvertInfo.Index,    // ✅ 添加Index字段
 				Delta: &dto.ClaudeMediaMessage{
-					Type: "text_delta",                   // ✅ 修正为 "text_delta"
+					Type: "text_delta",                  // ✅ 修正为 "text_delta"
 					Text: common.GetPointer[string](openAIResponse.Choices[0].Delta.GetContentString()),
 				},
 			})
