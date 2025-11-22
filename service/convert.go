@@ -165,11 +165,21 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 					}
 					//oaiToolMessage.SetStringContent(*mediaMsg.GetMediaContent().Text)
 					if mediaMsg.IsStringContent() {
-						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
+						content := mediaMsg.GetStringContent()
+						// 如果工具返回的内容为空，则替换{"stdout":""}
+						if content == "" {
+							content = `{"stdout":""}`
+						}
+						oaiToolMessage.SetStringContent(content)
 					} else {
 						mediaContents := mediaMsg.ParseMediaContent()
 						encodeJson, _ := common.Marshal(mediaContents)
-						oaiToolMessage.SetStringContent(string(encodeJson))
+						jsonStr := string(encodeJson)
+						// 如果编码后的JSON字符串为空，则替换{"stdout":""}
+						if jsonStr == "" {
+							jsonStr = `{"stdout":""}`
+						}
+						oaiToolMessage.SetStringContent(jsonStr)
 					}
 					openAIMessages = append(openAIMessages, oaiToolMessage)
 				}
@@ -441,6 +451,11 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 }
 
 func stopReasonOpenAI2Claude(reason string) string {
+	// 如果传入的reason为空字符串，则返回默认值"end_turn"
+	if reason == "" {
+		return "end_turn"
+	}
+
 	switch reason {
 	case "stop":
 		return "end_turn"
