@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,7 @@ var claudeModelMap = map[string]string{
 	"claude-opus-4-20250514":     "claude-opus-4@20250514",
 	"claude-opus-4-1-20250805":   "claude-opus-4-1@20250805",
 	"claude-sonnet-4-5-20250929": "claude-sonnet-4-5@20250929",
+	"claude-opus-4-5-20251101":   "claude-opus-4-5@20251101",
 }
 
 const anthropicVersion = "vertex-2023-10-16"
@@ -54,6 +56,14 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	// 检查是否启用 Claude-to-Gemini 转换
+	if info.ChannelOtherSettings.VertexClaudeToGemini {
+		// 使用 Gemini 适配器的转换：Claude -> OpenAI -> Gemini
+		geminiAdaptor := gemini.Adaptor{}
+		return geminiAdaptor.ConvertClaudeRequest(c, info, request)
+	}
+
+	// 默认行为：转换为 VertexAIClaudeRequest
 	if v, ok := claudeModelMap[info.UpstreamModelName]; ok {
 		c.Set("request_model", v)
 	} else {
@@ -75,7 +85,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	if strings.HasPrefix(info.UpstreamModelName, "claude") {
-		a.RequestMode = RequestModeClaude
+		// 检查是否启用 Claude-to-Gemini 转换
+		if info.ChannelOtherSettings.VertexClaudeToGemini {
+			a.RequestMode = RequestModeGemini
+		} else {
+			a.RequestMode = RequestModeClaude
+		}
 	} else if strings.Contains(info.UpstreamModelName, "llama") ||
 		// open source models
 		strings.Contains(info.UpstreamModelName, "-maas") {
@@ -180,6 +195,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
 			} else if strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
 				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
+			} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
+				info.UpstreamModelName = baseModel
 			}
 		}
 

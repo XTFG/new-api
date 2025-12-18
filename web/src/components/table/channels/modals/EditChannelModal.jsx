@@ -155,6 +155,8 @@ const EditChannelModal = (props) => {
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
+    // 仅 Vertex: Claude 模型使用 Gemini 格式转换
+    vertex_claude_to_gemini: false,
     // 仅 AWS: 密钥格式和区域（存入 settings.aws_key_type 和 settings.aws_region）
     aws_key_type: 'ak_sk',
     // 企业账户设置
@@ -190,6 +192,30 @@ const EditChannelModal = (props) => {
   const [keyMode, setKeyMode] = useState('append'); // 密钥模式：replace（覆盖）或 append（追加）
   const [isEnterpriseAccount, setIsEnterpriseAccount] = useState(false); // 是否为企业账户
   const [doubaoApiEditUnlocked, setDoubaoApiEditUnlocked] = useState(false); // 豆包渠道自定义 API 地址隐藏入口
+  const redirectModelList = useMemo(() => {
+    const mapping = inputs.model_mapping;
+    if (typeof mapping !== 'string') return [];
+    const trimmed = mapping.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed)
+      ) {
+        return [];
+      }
+      const values = Object.values(parsed)
+        .map((value) =>
+          typeof value === 'string' ? value.trim() : undefined,
+        )
+        .filter((value) => value);
+      return Array.from(new Set(values));
+    } catch (error) {
+      return [];
+    }
+  }, [inputs.model_mapping]);
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -220,6 +246,8 @@ const EditChannelModal = (props) => {
   ];
   const formContainerRef = useRef(null);
   const doubaoApiClickCountRef = useRef(0);
+  const initialModelsRef = useRef([]);
+  const initialModelMappingRef = useRef('');
 
   // 2FA状态更新辅助函数
   const updateTwoFAState = (updates) => {
@@ -535,6 +563,9 @@ const EditChannelModal = (props) => {
             parsedSettings.azure_responses_version || '';
           // 读取 Vertex 密钥格式
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
+          // 读取 Vertex Claude-to-Gemini 转换设置
+          data.vertex_claude_to_gemini =
+            parsedSettings.vertex_claude_to_gemini || false;
           // 读取 AWS 密钥格式和区域
           data.aws_key_type = parsedSettings.aws_key_type || 'ak_sk';
           // 读取企业账户设置
@@ -550,6 +581,7 @@ const EditChannelModal = (props) => {
           data.azure_responses_version = '';
           data.region = '';
           data.vertex_key_type = 'json';
+          data.vertex_claude_to_gemini = false;
           data.aws_key_type = 'ak_sk';
           data.is_enterprise_account = false;
           data.allow_service_tier = false;
@@ -559,6 +591,7 @@ const EditChannelModal = (props) => {
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
         data.vertex_key_type = 'json';
+        data.vertex_claude_to_gemini = false;
         data.aws_key_type = 'ak_sk';
         data.is_enterprise_account = false;
         data.allow_service_tier = false;
@@ -595,6 +628,10 @@ const EditChannelModal = (props) => {
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
       });
+      initialModelsRef.current = (data.models || [])
+        .map((model) => (model || '').trim())
+        .filter(Boolean);
+      initialModelMappingRef.current = data.model_mapping || '';
       // console.log(data);
     } else {
       showError(message);
@@ -830,6 +867,13 @@ const EditChannelModal = (props) => {
     }
   }, [props.visible, channelId]);
 
+  useEffect(() => {
+    if (!isEdit) {
+      initialModelsRef.current = [];
+      initialModelMappingRef.current = '';
+    }
+  }, [isEdit, props.visible]);
+
   // 统一的模态框重置函数
   const resetModalState = () => {
     formApiRef.current?.reset();
@@ -901,6 +945,80 @@ const EditChannelModal = (props) => {
         );
       }
     })();
+  };
+
+  const confirmMissingModelMappings = (missingModels) =>
+    new Promise((resolve) => {
+      const modal = Modal.confirm({
+        title: t('模型未加入列表，可能无法调用'),
+        content: (
+          <div className='text-sm leading-6'>
+            <div>
+              {t(
+                '模型重定向里的下列模型尚未添加到“模型”列表，调用时会因为缺少可用模型而失败：',
+              )}
+            </div>
+            <div className='font-mono text-xs break-all text-red-600 mt-1'>
+              {missingModels.join(', ')}
+            </div>
+            <div className='mt-2'>
+              {t(
+                '你可以在“自定义模型名称”处手动添加它们，然后点击填入后再提交，或者直接使用下方操作自动处理。',
+              )}
+            </div>
+          </div>
+        ),
+        centered: true,
+        footer: (
+          <Space align='center' className='w-full justify-end'>
+            <Button
+              type='tertiary'
+              onClick={() => {
+                modal.destroy();
+                resolve('cancel');
+              }}
+            >
+              {t('返回修改')}
+            </Button>
+            <Button
+              type='primary'
+              theme='light'
+              onClick={() => {
+                modal.destroy();
+                resolve('submit');
+              }}
+            >
+              {t('直接提交')}
+            </Button>
+            <Button
+              type='primary'
+              theme='solid'
+              onClick={() => {
+                modal.destroy();
+                resolve('add');
+              }}
+            >
+              {t('添加后提交')}
+            </Button>
+          </Space>
+        ),
+      });
+    });
+
+  const hasModelConfigChanged = (normalizedModels, modelMappingStr) => {
+    if (!isEdit) return true;
+    const initialModels = initialModelsRef.current;
+    if (normalizedModels.length !== initialModels.length) {
+      return true;
+    }
+    for (let i = 0; i < normalizedModels.length; i++) {
+      if (normalizedModels[i] !== initialModels[i]) {
+        return true;
+      }
+    }
+    const normalizedMapping = (modelMappingStr || '').trim();
+    const initialMapping = (initialModelMappingRef.current || '').trim();
+    return normalizedMapping !== initialMapping;
   };
 
   const submit = async () => {
@@ -986,14 +1104,55 @@ const EditChannelModal = (props) => {
       showInfo(t('请输入API地址！'));
       return;
     }
-    if (
-      localInputs.model_mapping &&
-      localInputs.model_mapping !== '' &&
-      !verifyJSON(localInputs.model_mapping)
-    ) {
-      showInfo(t('模型映射必须是合法的 JSON 格式！'));
-      return;
+    const hasModelMapping =
+      typeof localInputs.model_mapping === 'string' &&
+      localInputs.model_mapping.trim() !== '';
+    let parsedModelMapping = null;
+    if (hasModelMapping) {
+      if (!verifyJSON(localInputs.model_mapping)) {
+        showInfo(t('模型映射必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        parsedModelMapping = JSON.parse(localInputs.model_mapping);
+      } catch (error) {
+        showInfo(t('模型映射必须是合法的 JSON 格式！'));
+        return;
+      }
     }
+
+    const normalizedModels = (localInputs.models || [])
+      .map((model) => (model || '').trim())
+      .filter(Boolean);
+    localInputs.models = normalizedModels;
+
+    if (
+      parsedModelMapping &&
+      typeof parsedModelMapping === 'object' &&
+      !Array.isArray(parsedModelMapping)
+    ) {
+      const modelSet = new Set(normalizedModels);
+      const missingModels = Object.keys(parsedModelMapping)
+        .map((key) => (key || '').trim())
+        .filter((key) => key && !modelSet.has(key));
+      const shouldPromptMissing =
+        missingModels.length > 0 &&
+        hasModelConfigChanged(normalizedModels, localInputs.model_mapping);
+      if (shouldPromptMissing) {
+        const confirmAction = await confirmMissingModelMappings(missingModels);
+        if (confirmAction === 'cancel') {
+          return;
+        }
+        if (confirmAction === 'add') {
+          const updatedModels = Array.from(
+            new Set([...normalizedModels, ...missingModels]),
+          );
+          localInputs.models = updatedModels;
+          handleInputChange('models', updatedModels);
+        }
+      }
+    }
+
     if (localInputs.base_url && localInputs.base_url.endsWith('/')) {
       localInputs.base_url = localInputs.base_url.slice(
         0,
@@ -1036,6 +1195,16 @@ const EditChannelModal = (props) => {
       settings.aws_key_type = localInputs.aws_key_type || 'ak_sk';
     }
 
+    // type === 41 (Vertex): 始终保存 vertex_key_type 到 settings，避免编辑时被重置
+    if (localInputs.type === 41) {
+      settings.vertex_key_type = localInputs.vertex_key_type || 'json';
+      settings.vertex_claude_to_gemini =
+        localInputs.vertex_claude_to_gemini || false;
+    } else if ('vertex_key_type' in settings) {
+      delete settings.vertex_key_type;
+      delete settings.vertex_claude_to_gemini;
+    }
+
     // type === 1 (OpenAI) 或 type === 14 (Claude): 设置字段透传控制（显式保存布尔值）
     if (localInputs.type === 1 || localInputs.type === 14) {
       settings.allow_service_tier = localInputs.allow_service_tier === true;
@@ -1059,6 +1228,8 @@ const EditChannelModal = (props) => {
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
+    // 顶层的 vertex_claude_to_gemini 不应发送给后端
+    delete localInputs.vertex_claude_to_gemini;
     // 顶层的 aws_key_type 不应发送给后端
     delete localInputs.aws_key_type;
     // 清理字段透传控制的临时字段
@@ -1567,6 +1738,23 @@ const EditChannelModal = (props) => {
                             ? t('API Key 模式下不支持批量创建')
                             : t('JSON 模式支持手动输入或上传服务账号 JSON')
                         }
+                      />
+                    )}
+                    {inputs.type === 41 && (
+                      <Form.Switch
+                        field='vertex_claude_to_gemini'
+                        label={t('Claude 模型使用 Gemini 格式')}
+                        checkedText={t('开')}
+                        uncheckedText={t('关')}
+                        onChange={(value) =>
+                          handleChannelOtherSettingsChange(
+                            'vertex_claude_to_gemini',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '开启后，Claude 模型请求将转换为 Gemini 格式并发送到 Google 端点，而不是使用原生 Anthropic 端点',
+                        )}
                       />
                     )}
                     {batch ? (
@@ -2916,6 +3104,7 @@ const EditChannelModal = (props) => {
         visible={modelModalVisible}
         models={fetchedModels}
         selected={inputs.models}
+        redirectModels={redirectModelList}
         onConfirm={(selectedModels) => {
           handleInputChange('models', selectedModels);
           showSuccess(t('模型列表已更新'));
