@@ -56,6 +56,14 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	// 检查是否启用 Claude-to-Gemini 转换
+	if info.ChannelOtherSettings.VertexClaudeToGemini {
+		// 使用 Gemini 适配器的转换：Claude -> OpenAI -> Gemini
+		geminiAdaptor := gemini.Adaptor{}
+		return geminiAdaptor.ConvertClaudeRequest(c, info, request)
+	}
+
+	// 默认行为：转换为 VertexAIClaudeRequest
 	if v, ok := claudeModelMap[info.UpstreamModelName]; ok {
 		c.Set("request_model", v)
 	} else {
@@ -77,7 +85,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 	if strings.HasPrefix(info.UpstreamModelName, "claude") {
-		a.RequestMode = RequestModeClaude
+		// 检查是否启用 Claude-to-Gemini 转换
+		if info.ChannelOtherSettings.VertexClaudeToGemini {
+			a.RequestMode = RequestModeGemini
+		} else {
+			a.RequestMode = RequestModeClaude
+		}
 	} else if strings.Contains(info.UpstreamModelName, "llama") ||
 		// open source models
 		strings.Contains(info.UpstreamModelName, "-maas") {

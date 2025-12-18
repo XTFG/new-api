@@ -155,6 +155,8 @@ const EditChannelModal = (props) => {
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
+    // 仅 Vertex: Claude 模型使用 Gemini 格式转换
+    vertex_claude_to_gemini: false,
     // 仅 AWS: 密钥格式和区域（存入 settings.aws_key_type 和 settings.aws_region）
     aws_key_type: 'ak_sk',
     // 企业账户设置
@@ -561,6 +563,9 @@ const EditChannelModal = (props) => {
             parsedSettings.azure_responses_version || '';
           // 读取 Vertex 密钥格式
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
+          // 读取 Vertex Claude-to-Gemini 转换设置
+          data.vertex_claude_to_gemini =
+            parsedSettings.vertex_claude_to_gemini || false;
           // 读取 AWS 密钥格式和区域
           data.aws_key_type = parsedSettings.aws_key_type || 'ak_sk';
           // 读取企业账户设置
@@ -576,6 +581,7 @@ const EditChannelModal = (props) => {
           data.azure_responses_version = '';
           data.region = '';
           data.vertex_key_type = 'json';
+          data.vertex_claude_to_gemini = false;
           data.aws_key_type = 'ak_sk';
           data.is_enterprise_account = false;
           data.allow_service_tier = false;
@@ -585,6 +591,7 @@ const EditChannelModal = (props) => {
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
         data.vertex_key_type = 'json';
+        data.vertex_claude_to_gemini = false;
         data.aws_key_type = 'ak_sk';
         data.is_enterprise_account = false;
         data.allow_service_tier = false;
@@ -1191,8 +1198,11 @@ const EditChannelModal = (props) => {
     // type === 41 (Vertex): 始终保存 vertex_key_type 到 settings，避免编辑时被重置
     if (localInputs.type === 41) {
       settings.vertex_key_type = localInputs.vertex_key_type || 'json';
+      settings.vertex_claude_to_gemini =
+        localInputs.vertex_claude_to_gemini || false;
     } else if ('vertex_key_type' in settings) {
       delete settings.vertex_key_type;
+      delete settings.vertex_claude_to_gemini;
     }
 
     // type === 1 (OpenAI) 或 type === 14 (Claude): 设置字段透传控制（显式保存布尔值）
@@ -1218,6 +1228,8 @@ const EditChannelModal = (props) => {
     delete localInputs.is_enterprise_account;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
+    // 顶层的 vertex_claude_to_gemini 不应发送给后端
+    delete localInputs.vertex_claude_to_gemini;
     // 顶层的 aws_key_type 不应发送给后端
     delete localInputs.aws_key_type;
     // 清理字段透传控制的临时字段
@@ -1726,6 +1738,23 @@ const EditChannelModal = (props) => {
                             ? t('API Key 模式下不支持批量创建')
                             : t('JSON 模式支持手动输入或上传服务账号 JSON')
                         }
+                      />
+                    )}
+                    {inputs.type === 41 && (
+                      <Form.Switch
+                        field='vertex_claude_to_gemini'
+                        label={t('Claude 模型使用 Gemini 格式')}
+                        checkedText={t('开')}
+                        uncheckedText={t('关')}
+                        onChange={(value) =>
+                          handleChannelOtherSettingsChange(
+                            'vertex_claude_to_gemini',
+                            value,
+                          )
+                        }
+                        extraText={t(
+                          '开启后，Claude 模型请求将转换为 Gemini 格式并发送到 Google 端点，而不是使用原生 Anthropic 端点',
+                        )}
                       />
                     )}
                     {batch ? (
