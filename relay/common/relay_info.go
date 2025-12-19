@@ -36,6 +36,7 @@ type ClaudeConvertInfo struct {
 	Usage            *dto.Usage
 	FinishReason     string
 	Done             bool
+	ToolUseStarted   map[int]bool
 }
 
 type RerankerInfo struct {
@@ -290,6 +291,7 @@ func GenRelayInfoClaude(c *gin.Context, request dto.Request) *RelayInfo {
 	info.ShouldIncludeUsage = false
 	info.ClaudeConvertInfo = &ClaudeConvertInfo{
 		LastMessagesType: LastMessageTypeNone,
+		ToolUseStarted:   make(map[int]bool),
 	}
 	if c.Query("beta") == "true" {
 		info.IsClaudeBetaQuery = true

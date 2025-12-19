@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -200,6 +201,30 @@ func generateStopBlock(index int) *dto.ClaudeResponse {
 	}
 }
 
+func generateToolUseStopBlocks(info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
+	if info == nil || info.ClaudeConvertInfo == nil || len(info.ClaudeConvertInfo.ToolUseStarted) == 0 {
+		return nil
+	}
+
+	indexes := make([]int, 0, len(info.ClaudeConvertInfo.ToolUseStarted))
+	maxIndex := 0
+	for idx := range info.ClaudeConvertInfo.ToolUseStarted {
+		indexes = append(indexes, idx)
+		if idx > maxIndex {
+			maxIndex = idx
+		}
+	}
+	sort.Ints(indexes)
+
+	blocks := make([]*dto.ClaudeResponse, 0, len(indexes))
+	for _, idx := range indexes {
+		blocks = append(blocks, generateStopBlock(idx))
+		delete(info.ClaudeConvertInfo.ToolUseStarted, idx)
+	}
+	info.ClaudeConvertInfo.Index = maxIndex
+	return blocks
+}
+
 func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
 	if info.ClaudeConvertInfo.Done {
 		return nil
@@ -227,38 +252,51 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		//})
 		if openAIResponse.IsToolCall() {
 			info.ClaudeConvertInfo.LastMessagesType = relaycommon.LastMessageTypeTools
-			var toolCall dto.ToolCallResponse
+			if info.ClaudeConvertInfo.ToolUseStarted == nil {
+				info.ClaudeConvertInfo.ToolUseStarted = make(map[int]bool)
+			}
+			var toolCalls []dto.ToolCallResponse
 			if len(openAIResponse.Choices) > 0 && len(openAIResponse.Choices[0].Delta.ToolCalls) > 0 {
-				toolCall = openAIResponse.Choices[0].Delta.ToolCalls[0]
-			} else {
-				first := openAIResponse.GetFirstToolCall()
-				if first != nil {
-					toolCall = *first
-				} else {
-					toolCall = dto.ToolCallResponse{}
+				toolCalls = openAIResponse.Choices[0].Delta.ToolCalls
+			} else if first := openAIResponse.GetFirstToolCall(); first != nil {
+				toolCalls = []dto.ToolCallResponse{*first}
+			}
+
+			for i, toolCall := range toolCalls {
+				blockIndex := info.ClaudeConvertInfo.Index
+				if toolCall.Index != nil {
+					blockIndex = *toolCall.Index
+				} else if len(toolCalls) > 1 {
+					blockIndex = info.ClaudeConvertInfo.Index + i
 				}
-			}
-			resp := &dto.ClaudeResponse{
-				Type: "content_block_start",
-				ContentBlock: &dto.ClaudeMediaMessage{
-					Id:    toolCall.ID,
-					Type:  "tool_use",
-					Name:  toolCall.Function.Name,
-					Input: map[string]interface{}{},
-				},
-			}
-			resp.SetIndex(0)
-			claudeResponses = append(claudeResponses, resp)
-			// 首块包含工具 delta，则追加 input_json_delta
-			if toolCall.Function.Arguments != "" {
-				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Index: &info.ClaudeConvertInfo.Index,
-					Type:  "content_block_delta",
-					Delta: &dto.ClaudeMediaMessage{
-						Type:        "input_json_delta",
-						PartialJson: &toolCall.Function.Arguments,
+
+				info.ClaudeConvertInfo.Index = blockIndex
+				info.ClaudeConvertInfo.ToolUseStarted[blockIndex] = true
+
+				resp := &dto.ClaudeResponse{
+					Type: "content_block_start",
+					ContentBlock: &dto.ClaudeMediaMessage{
+						Id:    toolCall.ID,
+						Type:  "tool_use",
+						Name:  toolCall.Function.Name,
+						Input: map[string]interface{}{},
 					},
-				})
+				}
+				resp.SetIndex(blockIndex)
+				claudeResponses = append(claudeResponses, resp)
+
+				// 首块包含工具 delta，则追加 input_json_delta
+				if toolCall.Function.Arguments != "" {
+					idx := blockIndex
+					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+						Index: &idx,
+						Type:  "content_block_delta",
+						Delta: &dto.ClaudeMediaMessage{
+							Type:        "input_json_delta",
+							PartialJson: &toolCall.Function.Arguments,
+						},
+					})
+				}
 			}
 		} else {
 
@@ -310,7 +348,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		// 如果首块就带 finish_reason，需要立即发送停止块
 		if len(openAIResponse.Choices) > 0 && openAIResponse.Choices[0].FinishReason != nil && *openAIResponse.Choices[0].FinishReason != "" {
 			info.FinishReason = *openAIResponse.Choices[0].FinishReason
-			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			if info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeTools {
+				claudeResponses = append(claudeResponses, generateToolUseStopBlocks(info)...)
+			} else {
+				claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			}
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
 				oaiUsage = info.ClaudeConvertInfo.Usage
@@ -341,7 +383,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		// no choices
 		// 可能为非标准的 OpenAI 响应，判断是否已经完成
 		if info.ClaudeConvertInfo.Done {
-			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			if info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeTools {
+				claudeResponses = append(claudeResponses, generateToolUseStopBlocks(info)...)
+			} else {
+				claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			}
 			oaiUsage := info.ClaudeConvertInfo.Usage
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
@@ -374,6 +420,10 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		claudeResponse.Type = "content_block_delta"
 		if len(chosenChoice.Delta.ToolCalls) > 0 {
 			toolCalls := chosenChoice.Delta.ToolCalls
+			if info.ClaudeConvertInfo.ToolUseStarted == nil {
+				info.ClaudeConvertInfo.ToolUseStarted = make(map[int]bool)
+			}
+			toolUseStarted := info.ClaudeConvertInfo.ToolUseStarted
 			if info.ClaudeConvertInfo.LastMessagesType != relaycommon.LastMessageTypeTools {
 				claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
 				info.ClaudeConvertInfo.Index++
@@ -389,16 +439,19 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 				}
 
 				idx := blockIndex
-				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Index: &idx,
-					Type:  "content_block_start",
-					ContentBlock: &dto.ClaudeMediaMessage{
-						Id:    toolCall.ID,
-						Type:  "tool_use",
-						Name:  toolCall.Function.Name,
-						Input: map[string]interface{}{},
-					},
-				})
+				if !toolUseStarted[blockIndex] {
+					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+						Index: &idx,
+						Type:  "content_block_start",
+						ContentBlock: &dto.ClaudeMediaMessage{
+							Id:    toolCall.ID,
+							Type:  "tool_use",
+							Name:  toolCall.Function.Name,
+							Input: map[string]interface{}{},
+						},
+					})
+					toolUseStarted[blockIndex] = true
+				}
 
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 					Index: &idx,
@@ -434,7 +487,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 				} else {
 					if info.ClaudeConvertInfo.LastMessagesType != relaycommon.LastMessageTypeText {
 						if info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeThinking || info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeTools {
-							claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+							if info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeTools {
+								claudeResponses = append(claudeResponses, generateToolUseStopBlocks(info)...)
+							} else {
+								claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+							}
 							info.ClaudeConvertInfo.Index++
 						}
 						claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
@@ -463,7 +520,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		}
 
 		if doneChunk || info.ClaudeConvertInfo.Done {
-			claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			if info.ClaudeConvertInfo.LastMessagesType == relaycommon.LastMessageTypeTools {
+				claudeResponses = append(claudeResponses, generateToolUseStopBlocks(info)...)
+			} else {
+				claudeResponses = append(claudeResponses, generateStopBlock(info.ClaudeConvertInfo.Index))
+			}
 			oaiUsage := openAIResponse.Usage
 			if oaiUsage == nil {
 				oaiUsage = info.ClaudeConvertInfo.Usage
