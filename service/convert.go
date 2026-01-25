@@ -439,7 +439,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 				}
 
 				idx := blockIndex
-				if !toolUseStarted[blockIndex] {
+				// 合并两个分支逻辑：检查工具名称非空且未开始过
+				if toolCall.Function.Name != "" && !toolUseStarted[blockIndex] {
 					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 						Index: &idx,
 						Type:  "content_block_start",
@@ -453,14 +454,16 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 					toolUseStarted[blockIndex] = true
 				}
 
-				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Index: &idx,
-					Type:  "content_block_delta",
-					Delta: &dto.ClaudeMediaMessage{
-						Type:        "input_json_delta",
-						PartialJson: &toolCall.Function.Arguments,
-					},
-				})
+				if len(toolCall.Function.Arguments) > 0 {
+					claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
+						Index: &idx,
+						Type:  "content_block_delta",
+						Delta: &dto.ClaudeMediaMessage{
+							Type:        "input_json_delta",
+							PartialJson: &toolCall.Function.Arguments,
+						},
+					})
+				}
 
 				info.ClaudeConvertInfo.Index = blockIndex
 			}
@@ -731,20 +734,21 @@ func GeminiToOpenAIRequest(geminiRequest *dto.GeminiChatRequest, info *relaycomm
 		var tools []dto.ToolCallRequest
 		for _, tool := range geminiRequest.GetTools() {
 			if tool.FunctionDeclarations != nil {
-				// 将 Gemini 的 FunctionDeclarations 转换为 OpenAI 的 ToolCallRequest
-				functionDeclarations, ok := tool.FunctionDeclarations.([]dto.FunctionRequest)
-				if ok {
-					for _, function := range functionDeclarations {
-						openAITool := dto.ToolCallRequest{
-							Type: "function",
-							Function: dto.FunctionRequest{
-								Name:        function.Name,
-								Description: function.Description,
-								Parameters:  function.Parameters,
-							},
-						}
-						tools = append(tools, openAITool)
+				functionDeclarations, err := common.Any2Type[[]dto.FunctionRequest](tool.FunctionDeclarations)
+				if err != nil {
+					common.SysError(fmt.Sprintf("failed to parse gemini function declarations: %v (type=%T)", err, tool.FunctionDeclarations))
+					continue
+				}
+				for _, function := range functionDeclarations {
+					openAITool := dto.ToolCallRequest{
+						Type: "function",
+						Function: dto.FunctionRequest{
+							Name:        function.Name,
+							Description: function.Description,
+							Parameters:  function.Parameters,
+						},
 					}
+					tools = append(tools, openAITool)
 				}
 			}
 		}
